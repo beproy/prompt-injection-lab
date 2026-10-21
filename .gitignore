@@ -18,7 +18,8 @@ Thumbs.db
 .vscode/
 .idea/
 
-# Evaluation results CSVs (keep .gitkeep and summary.csv tracked)
+# Evaluation results CSVs (keep .gitkeep and summary CSVs tracked)
 results/*.csv
 !results/summary.csv
+!results/usability_summary.csv
 
