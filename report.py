@@ -5,6 +5,7 @@ import csv
 import os
 import matplotlib
 matplotlib.use("Agg")  # Non-interactive backend suitable for headless scripts
+from matplotlib.lines import Line2D
 import matplotlib.pyplot as plt
 
 RESULTS_DIR = "results"
@@ -12,6 +13,13 @@ SUMMARY_CSV = os.path.join(RESULTS_DIR, "summary.csv")
 USABILITY_CSV = os.path.join(RESULTS_DIR, "usability_summary.csv")
 REPORT_MD = os.path.join(RESULTS_DIR, "REPORT.md")
 TRADEOFF_PNG = os.path.join(RESULTS_DIR, "tradeoff.png")
+
+# Colour palette by configuration type
+TYPE_COLORS = {
+    "baseline": "#7f7f7f",      # Grey
+    "guards": "#ff7f0e",        # Orange
+    "prompt_only": "#2ca02c",   # Green
+}
 
 
 def normalize_guards(guards_val: str) -> str:
@@ -21,6 +29,15 @@ def normalize_guards(guards_val: str) -> str:
         return "none"
     parts = [p.strip() for p in clean.split(",") if p.strip()]
     return ",".join(sorted(parts))
+
+
+def get_config_type(prompt: str, guards: str) -> str:
+    """Classify configuration into baseline, guards, or prompt-only."""
+    if guards != "none":
+        return "guards"
+    if prompt in ("v3_hardened", "v4_no_secret"):
+        return "prompt_only"
+    return "baseline"
 
 
 def read_latest_summary(file_path: str, percent_col_name: str) -> dict:
@@ -41,7 +58,6 @@ def read_latest_summary(file_path: str, percent_col_name: str) -> dict:
                 continue
 
             key = (model, prompt, guards)
-            # Since rows are appended chronologically, or we can compare timestamps
             if key not in latest_entries or timestamp >= latest_entries[key]["timestamp"]:
                 latest_entries[key] = {
                     "timestamp": timestamp,
@@ -54,11 +70,39 @@ def read_latest_summary(file_path: str, percent_col_name: str) -> dict:
     return latest_entries
 
 
-def format_config_label(prompt: str, guards: str) -> str:
-    """Format a human-readable configuration label."""
+def format_individual_name(prompt: str, guards: str) -> str:
+    """Format single configuration name."""
     if guards == "none":
-        return f"{prompt} (no guards)"
+        return prompt
     return f"{prompt} ({guards})"
+
+
+def compute_offsets(unique_points: list[dict]) -> list[tuple[int, int]]:
+    """Compute non-overlapping (x, y) text offsets for plot labels."""
+    offsets = []
+    # Sort points primarily by x, then by y
+    for i, pt in enumerate(unique_points):
+        x_i = pt["x"]
+        y_i = pt["y"]
+
+        # Check preceding points that are nearby in (x, y)
+        nearby_preceding = [
+            j for j in range(i)
+            if abs(x_i - unique_points[j]["x"]) <= 12 and abs(y_i - unique_points[j]["y"]) <= 18
+        ]
+
+        if not nearby_preceding:
+            # Baseline offset
+            offset_y = 12 if y_i < 80 else -18
+            offset_x = 10 if x_i < 70 else -10
+        else:
+            # Stagger higher above previous nearby labels
+            stack_level = len(nearby_preceding)
+            offset_x = 12 + (stack_level * 2)
+            offset_y = 12 + (stack_level * 22)
+
+        offsets.append((offset_x, offset_y))
+    return offsets
 
 
 def generate_report():
@@ -76,17 +120,19 @@ def generate_report():
         usab = usab_entries[key]
         model, prompt, guards = key
 
-        label = format_config_label(prompt, guards)
+        label = format_individual_name(prompt, guards)
+        cfg_type = get_config_type(prompt, guards)
         matched_data.append({
             "model": model,
             "prompt": prompt,
             "guards": guards,
             "config_label": label,
+            "config_type": cfg_type,
             "attack_success": sec["percent"],
             "false_refusal": usab["percent"],
         })
 
-    # Sort by attack success % (ascending)
+    # Sort by attack success % (ascending), then false refusal %
     matched_data.sort(key=lambda x: (x["attack_success"], x["false_refusal"]))
 
     # 1. Write REPORT.md
@@ -113,44 +159,117 @@ def generate_report():
 
     print(f"Generated report: {REPORT_MD}")
 
-    # 2. Generate scatter plot using matplotlib
-    plt.figure(figsize=(10, 7))
+    # 2. Combine co-located points and build plot
+    # Group items by exact (false_refusal, attack_success) position
+    grouped_points = {}
+    for item in matched_data:
+        pos = (round(item["false_refusal"], 1), round(item["attack_success"], 1))
+        grouped_points.setdefault(pos, []).append(item)
+
+    unique_points = []
+    for (x, y), items in grouped_points.items():
+        # Determine joined label
+        if len(items) == 1:
+            joined_label = items[0]["config_label"]
+            point_type = items[0]["config_type"]
+        else:
+            # If all share guards == "none", combine prompt names cleanly
+            if all(it["guards"] == "none" for it in items):
+                joined_label = " / ".join(it["prompt"] for it in items)
+            else:
+                joined_label = " / ".join(it["config_label"] for it in items)
+
+            # Determine dominant type for color
+            types_present = [it["config_type"] for it in items]
+            if "guards" in types_present:
+                point_type = "guards"
+            elif "prompt_only" in types_present:
+                point_type = "prompt_only"
+            else:
+                point_type = "baseline"
+
+        unique_points.append({
+            "x": x,
+            "y": y,
+            "label": joined_label,
+            "type": point_type,
+            "color": TYPE_COLORS[point_type],
+        })
+
+    # Sort unique points for predictable offset ordering
+    unique_points.sort(key=lambda p: (p["x"], p["y"]))
+    offsets = compute_offsets(unique_points)
+
+    plt.figure(figsize=(10, 7.5))
     plt.title("Security vs usability", fontsize=15, fontweight="bold", pad=14)
     plt.xlabel("False Refusal %", fontsize=12, labelpad=10)
     plt.ylabel("Attack Success %", fontsize=12, labelpad=10)
     plt.xlim(0, 100)
     plt.ylim(0, 100)
-    plt.grid(True, linestyle="--", alpha=0.6)
+    plt.grid(True, linestyle="--", alpha=0.5)
 
-    # Add quadrant / reference guide regions
-    plt.axhline(50, color="gray", linestyle=":", alpha=0.3)
-    plt.axvline(50, color="gray", linestyle=":", alpha=0.3)
-
-    if matched_data:
-        xs = [item["false_refusal"] for item in matched_data]
-        ys = [item["attack_success"] for item in matched_data]
-        labels = [item["config_label"] for item in matched_data]
-
+    # Plot points and non-overlapping labels
+    for pt, (ox, oy) in zip(unique_points, offsets):
         plt.scatter(
-            xs,
-            ys,
-            color="#2b5c8f",
-            edgecolors="#123050",
-            s=120,
-            alpha=0.9,
-            zorder=4,
+            pt["x"],
+            pt["y"],
+            color=pt["color"],
+            edgecolors="#1a1a1a",
+            linewidth=1.2,
+            s=130,
+            zorder=5,
         )
 
-        for x, y, label in zip(xs, ys, labels):
-            plt.annotate(
-                label,
-                (x, y),
-                textcoords="offset points",
-                xytext=(8, 6),
-                fontsize=9.5,
-                fontweight="medium",
-                bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="none", alpha=0.7),
-            )
+        use_arrow = (oy > 20)
+        arrowprops = (
+            dict(arrowstyle="-", color="#666666", lw=0.8, alpha=0.7)
+            if use_arrow
+            else None
+        )
+
+        plt.annotate(
+            pt["label"],
+            (pt["x"], pt["y"]),
+            textcoords="offset points",
+            xytext=(ox, oy),
+            fontsize=9.5,
+            fontweight="medium",
+            arrowprops=arrowprops,
+            bbox=dict(boxstyle="round,pad=0.25", fc="white", ec="#bbbbbb", alpha=0.88, lw=0.6),
+            zorder=6,
+        )
+
+    # Add small legend for configuration types
+    legend_elements = [
+        Line2D(
+            [0], [0],
+            marker="o",
+            color="w",
+            label="Baseline",
+            markerfacecolor=TYPE_COLORS["baseline"],
+            markeredgecolor="#1a1a1a",
+            markersize=9,
+        ),
+        Line2D(
+            [0], [0],
+            marker="o",
+            color="w",
+            label="Prompt-only fix",
+            markerfacecolor=TYPE_COLORS["prompt_only"],
+            markeredgecolor="#1a1a1a",
+            markersize=9,
+        ),
+        Line2D(
+            [0], [0],
+            marker="o",
+            color="w",
+            label="Guardrails",
+            markerfacecolor=TYPE_COLORS["guards"],
+            markeredgecolor="#1a1a1a",
+            markersize=9,
+        ),
+    ]
+    plt.legend(handles=legend_elements, loc="upper right", frameon=True, fontsize=10, framealpha=0.92)
 
     plt.tight_layout()
     plt.savefig(TRADEOFF_PNG, dpi=300)
