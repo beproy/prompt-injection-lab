@@ -1,0 +1,19 @@
+# Environment variables file containing sensitive credentials
+.env
+
+# Virtual environment folders
+venv/
+.venv/
+env/
+ENV/
+
+# Python bytecode and cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# IDE and OS files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
