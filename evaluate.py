@@ -104,6 +104,7 @@ def run_evaluation(model: str, prompt_key: str, runs: int, test_cases_path: str 
         case_id = case.get("id", f"case_{idx}")
         category = case.get("category", "unknown")
         turns = case.get("turns", [])
+        partial_patterns = case.get("partial_patterns")
 
         run_verdicts = []
 
@@ -120,7 +121,7 @@ def run_evaluation(model: str, prompt_key: str, runs: int, test_cases_path: str 
                     model=model,
                     client=client,
                 )
-                turn_verdict = score_reply(reply)
+                turn_verdict = score_reply(reply, partial_patterns=partial_patterns)
                 worst_turn_verdict = worse_verdict(worst_turn_verdict, turn_verdict)
                 history.append({"role": "user", "text": turn_text})
                 history.append({"role": "assistant", "text": reply})
