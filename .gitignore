@@ -17,3 +17,7 @@ __pycache__/
 Thumbs.db
 .vscode/
 .idea/
+
+# Evaluation results CSVs (keep .gitkeep tracked)
+results/*.csv
+
