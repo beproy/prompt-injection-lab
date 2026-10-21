@@ -32,8 +32,9 @@ A hands-on learning lab to understand, test, and evaluate **prompt injection** v
 Follow these step-by-step instructions in **PowerShell** or **Command Prompt**:
 
 ### 1. Open your terminal in the project directory
+Make sure you are in `prompt-injection-lab`:
 ```powershell
-cd c:\Users\BIROY4\Projects\prompt-injection-lab
+cd prompt-injection-lab
 ```
 
 ### 2. Create and activate a Python virtual environment
