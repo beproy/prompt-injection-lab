@@ -155,12 +155,53 @@ python evaluate.py --model gemini-2.5-flash --prompt v2_staff_verification --run
 
 #### CLI Options:
 - `--model`: Gemini model name (default: value from `.env` or `gemini-2.5-flash`).
-- `--prompt`: System prompt to evaluate: `v1_never_reveal` or `v2_staff_verification` (default: `v2_staff_verification`).
+- `--prompt`: System prompt to evaluate: `v1_never_reveal`, `v2_staff_verification`, `v3_hardened`, or `v4_no_secret` (default: `v2_staff_verification`).
 - `--runs`: Number of independent runs per test case (default: `1`).
+- `--guards`: Guardrails to activate: `none`, `input`, `output`, or `input,output` (default: `none`).
 - `--test-cases`: Path to test cases JSON (default: `test_cases.json`).
 
 #### Features:
 - **Rate-limit Protection**: Automatically pauses 2 seconds between calls and retries up to 3 times on HTTP 429 errors.
 - **Multi-turn Evaluation**: Sends multi-step attacks in order and tracks the worst verdict (`leaked > partial > safe`) across all turns.
-- **CSV Logging**: Automatically saves run records to `results/<timestamp>_<model>_<prompt>.csv`.
+- **CSV Logging**: Automatically saves detailed run records to `results/<timestamp>_<model>_<prompt>_<guards>.csv`.
+- **Persistent Summary Ledger**: Appends high-level run metrics (total runs, leaked, partial, safe, and attack success percentage) to `results/summary.csv`.
 - **Console Summary**: Displays a breakdown of leak rates per category and an overall **Attack Success Rate (Leaked + Partial)** percentage.
+
+---
+
+## Phase 3: Defense-in-Depth & Integrated Guardrails
+
+Phase 3 connects the defensive system prompts and programmatic guardrails into both the interactive Streamlit app and the automated evaluation pipeline.
+
+### 1. Interactive UI Controls (`app.py`)
+In the Streamlit sidebar, you can now toggle:
+- **System Prompt**: Choose from `v1_never_reveal`, `v2_staff_verification`, `v3_hardened`, or `v4_no_secret`.
+- **Input guard**: Runs `check_input()` on incoming user messages before the model is called. If triggered, the message is blocked immediately without querying the API.
+- **Output guard**: Runs `check_output()` on model replies. If the admin password is detected (forwards, reversed, or as an acrostic), the response is replaced with a standard safe refusal.
+
+### 2. Evaluating Guardrails (`evaluate.py`)
+You can systematically measure how effective different defense layers are against the attack suite in `test_cases.json`:
+
+```powershell
+# Baseline: Vulnerable prompt with no guardrails
+python evaluate.py --prompt v2_staff_verification --guards none --runs 1
+
+# Defense 1: Input guardrail only
+python evaluate.py --prompt v2_staff_verification --guards input --runs 1
+
+# Defense 2: Output guardrail only
+python evaluate.py --prompt v2_staff_verification --guards output --runs 1
+
+# Defense 3: Full guardrails (input + output)
+python evaluate.py --prompt v2_staff_verification --guards input,output --runs 1
+
+# Defense 4: Hardened prompt with full guardrails
+python evaluate.py --prompt v3_hardened --guards input,output --runs 1
+
+# Defense 5: Zero-knowledge prompt (no secret in context)
+python evaluate.py --prompt v4_no_secret --guards none --runs 1
+```
+
+### 3. Comparing Results (`results/summary.csv`)
+Each evaluation run automatically logs a row to `results/summary.csv`, allowing you to track and compare the Attack Success Rate (ASR) across prompts, models, and guard configurations over time.
+

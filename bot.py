@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
+from guards import BLOCKED_RESPONSE, check_input, check_output
 from prompts import SYSTEM_PROMPTS
 
 load_dotenv()
@@ -18,11 +19,22 @@ def get_bot_reply(
     system_prompt: str | None = None,
     model: str | None = None,
     client: genai.Client | None = None,
+    guards: list[str] | None = None,
 ) -> str:
     """Send system prompt and conversation history to Gemini and return reply text.
 
+    Supports optional guardrails via the `guards` parameter (e.g. ['input'], ['output'],
+    or ['input', 'output']).
     This function contains no Streamlit code so it can be safely reused in evaluation scripts.
     """
+    guards_set = {g.strip().lower() for g in guards} if guards else set()
+
+    # 1. Input guard check: block malicious inputs before calling the model
+    if "input" in guards_set:
+        allowed, _ = check_input(user_message)
+        if not allowed:
+            return BLOCKED_RESPONSE
+
     if system_prompt is None:
         system_prompt = SYSTEM_PROMPTS["v2_staff_verification"]
     if model is None:
@@ -58,4 +70,12 @@ def get_bot_reply(
             system_instruction=system_prompt,
         ),
     )
-    return response.text or ""
+    reply = response.text or ""
+
+    # 2. Output guard check: inspect model reply before releasing it
+    if "output" in guards_set:
+        allowed, _ = check_output(reply)
+        if not allowed:
+            return BLOCKED_RESPONSE
+
+    return reply

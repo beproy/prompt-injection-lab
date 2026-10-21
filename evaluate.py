@@ -36,6 +36,7 @@ def call_bot_with_retry(
     system_prompt: str,
     model: str,
     client: genai.Client,
+    guards: list[str] | None = None,
     max_retries: int = 3,
     delay_between_calls: float = 2.0,
 ) -> str:
@@ -49,6 +50,7 @@ def call_bot_with_retry(
                 system_prompt=system_prompt,
                 model=model,
                 client=client,
+                guards=guards,
             )
         except Exception as e:
             err_msg = str(e).lower()
@@ -69,7 +71,13 @@ def call_bot_with_retry(
                 raise
 
 
-def run_evaluation(model: str, prompt_key: str, runs: int, test_cases_path: str = "test_cases.json"):
+def run_evaluation(
+    model: str,
+    prompt_key: str,
+    runs: int,
+    guards_str: str = "none",
+    test_cases_path: str = "test_cases.json",
+):
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         print("Error: GEMINI_API_KEY not found in environment or .env file.")
@@ -85,6 +93,20 @@ def run_evaluation(model: str, prompt_key: str, runs: int, test_cases_path: str 
         print(f"Error: Test cases file not found at '{test_cases_path}'.")
         sys.exit(1)
 
+    # Parse and validate guards option
+    clean_guards_str = guards_str.strip().lower()
+    if clean_guards_str == "none" or not clean_guards_str:
+        guards_list = []
+        guards_label = "none"
+    else:
+        parts = [p.strip() for p in clean_guards_str.split(",") if p.strip()]
+        for p in parts:
+            if p not in ("input", "output"):
+                print(f"Error: Invalid guard '{p}'. Choices are: none, input, output, or input,output")
+                sys.exit(1)
+        guards_list = parts
+        guards_label = ",".join(parts)
+
     with open(test_cases_path, "r", encoding="utf-8") as f:
         test_cases = json.load(f)
 
@@ -94,6 +116,7 @@ def run_evaluation(model: str, prompt_key: str, runs: int, test_cases_path: str 
     print(f"\nStarting Evaluation:")
     print(f"  Model:       {model}")
     print(f"  Prompt:      {prompt_key}")
+    print(f"  Guards:      {guards_label}")
     print(f"  Test Cases:  {total_cases}")
     print(f"  Runs/Case:   {runs}")
     print(f"  Total Runs:  {total_cases * runs}\n")
@@ -120,6 +143,7 @@ def run_evaluation(model: str, prompt_key: str, runs: int, test_cases_path: str 
                     system_prompt=system_prompt,
                     model=model,
                     client=client,
+                    guards=guards_list,
                 )
                 turn_verdict = score_reply(reply, partial_patterns=partial_patterns)
                 worst_turn_verdict = worse_verdict(worst_turn_verdict, turn_verdict)
@@ -144,20 +168,37 @@ def run_evaluation(model: str, prompt_key: str, runs: int, test_cases_path: str 
     os.makedirs("results", exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     sanitized_model = model.replace("/", "_").replace(":", "_").replace("\\", "_")
-    csv_filename = f"results/{timestamp}_{sanitized_model}_{prompt_key}.csv"
+    guards_tag = guards_label.replace(",", "_")
+    csv_filename = f"results/{timestamp}_{sanitized_model}_{prompt_key}_{guards_tag}.csv"
 
-    # Save to CSV
+    # Save detailed run results to CSV
     fieldnames = ["test_id", "category", "run", "verdict", "final_reply"]
     with open(csv_filename, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(results)
 
-    # Print summary
-    print_summary(results, model, prompt_key, csv_filename)
+    # Print summary and append to results/summary.csv
+    print_summary(
+        results=results,
+        model=model,
+        prompt_key=prompt_key,
+        guards_label=guards_label,
+        runs=runs,
+        timestamp=timestamp,
+        csv_filename=csv_filename,
+    )
 
 
-def print_summary(results: list[dict], model: str, prompt_key: str, csv_filename: str):
+def print_summary(
+    results: list[dict],
+    model: str,
+    prompt_key: str,
+    guards_label: str,
+    runs: int,
+    timestamp: str,
+    csv_filename: str,
+):
     total_runs = len(results)
     if total_runs == 0:
         print("No results to display.")
@@ -191,6 +232,7 @@ def print_summary(results: list[dict], model: str, prompt_key: str, csv_filename
     print("EVALUATION SUMMARY")
     print(f"  Model:      {model}")
     print(f"  Prompt:     {prompt_key}")
+    print(f"  Guards:     {guards_label}")
     print(f"  Total Runs: {total_runs}")
     print(f"  CSV Saved:  {csv_filename}")
     print("=" * 90)
@@ -209,6 +251,39 @@ def print_summary(results: list[dict], model: str, prompt_key: str, csv_filename
     )
     print("=" * 90)
     print(f"Attack Success Rate (Leaked + Partial): {overall_success_rate:.1f}%\n")
+
+    # Append row to results/summary.csv
+    summary_csv_path = os.path.join("results", "summary.csv")
+    summary_headers = [
+        "timestamp",
+        "model",
+        "prompt",
+        "guards",
+        "runs",
+        "total",
+        "leaked",
+        "partial",
+        "safe",
+        "attack_success_percent",
+    ]
+    file_exists = os.path.exists(summary_csv_path)
+    with open(summary_csv_path, "a", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        if not file_exists:
+            writer.writerow(summary_headers)
+        writer.writerow([
+            timestamp,
+            model,
+            prompt_key,
+            guards_label,
+            runs,
+            total_runs,
+            overall_leaked,
+            overall_partial,
+            overall_safe,
+            f"{overall_success_rate:.1f}",
+        ])
+    print(f"Appended summary line to {summary_csv_path}")
 
 
 def main():
@@ -233,6 +308,12 @@ def main():
         help="Number of times to run each test case (default: 1)",
     )
     parser.add_argument(
+        "--guards",
+        type=str,
+        default="none",
+        help="Guards to enable: none, input, output, or input,output (default: none)",
+    )
+    parser.add_argument(
         "--test-cases",
         type=str,
         default="test_cases.json",
@@ -244,6 +325,7 @@ def main():
         model=args.model,
         prompt_key=args.prompt,
         runs=args.runs,
+        guards_str=args.guards,
         test_cases_path=args.test_cases,
     )
 
